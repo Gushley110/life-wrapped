@@ -1,56 +1,149 @@
 import streamlit as st
-from openai import OpenAI
+from PIL import Image, ImageDraw, ImageFont
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+import random
+import os
+import numpy as np
+from moviepy.video.compositing.concatenate import concatenate_videoclips
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Ensure FFmpeg is available
+os.environ["IMAGEIO_FFMPEG_EXE"] = '/opt/homebrew/bin/ffmpeg'  # Adjust this if FFmpeg is in a custom location
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# Function to calculate yearly percentages
+def calculate_percentages(minutes_music, work_hours, sleep_hours, exercise_hours, hobby_hours):
+    total_year_minutes = 525600  # Total minutes in a year (365 days)
+    activities_minutes = {
+        "Music": minutes_music,
+        "Work": work_hours * 60 * 365,
+        "Sleep": sleep_hours * 60 * 365,
+        "Exercise": exercise_hours * 60 * 365,
+        "Hobbies": hobby_hours * 60 * 365,
+    }
+    percentages = {k: (v / total_year_minutes) * 100 for k, v in activities_minutes.items()}
+    return percentages
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# Function to create a single slide
+def create_slide(stat_title, stat_value, color, width=1080, height=1920):
+    image = Image.new("RGB", (width, height), color)
+    draw = ImageDraw.Draw(image)
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+    # Use default fonts (replace with custom fonts for better design)
+    title_font = ImageFont.truetype("fonts/Boogaloo-Regular.ttf", 80)  # Replace with your font path
+    value_font = ImageFont.truetype("fonts/Boogaloo-Regular.ttf", 100)
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # Calculate text size and position for centering
+    title_bbox = draw.textbbox((0, 0), stat_title, font=title_font)
+    value_bbox = draw.textbbox((0, 0), stat_value, font=value_font)
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+    title_width, title_height = title_bbox[2] - title_bbox[0], title_bbox[3] - title_bbox[1]
+    value_width, value_height = value_bbox[2] - value_bbox[0], value_bbox[3] - value_bbox[1]
+
+    # Centering the text
+    title_x = (width - title_width) // 2
+    title_y = (height - title_height) // 2 - 50  # Slightly above center for the title
+    value_x = (width - value_width) // 2
+    value_y = (height - value_height) // 2 + 50  # Slightly below center for the value
+
+    # Draw the text
+    draw.text((title_x, title_y), stat_title, font=title_font, fill="white")
+    draw.text((value_x, value_y), stat_value, font=value_font, fill="white")
+
+    return image
+
+
+# Function to create a video slide with text overlay
+def create_video_slide(video_path, stat_title, stat_value, duration=5):
+    # Load the video
+    clip = VideoFileClip(video_path)
+
+    # Resize video to fit Instagram Story dimensions
+    clip = clip.resize((1080, 1920))
+
+    # Create text clips for the title and value
+    title_text = TextClip(
+        stat_title,
+        fontsize=80,
+        color="white",
+        font="Arial-Bold",  # Ensure this font is installed or change to an available one
+        size=(1080, None),  # Centered horizontally
+        align="center",
+        method="caption",
+    ).set_position(("center", "center")).set_duration(duration)
+
+    value_text = TextClip(
+        stat_value,
+        fontsize=100,
+        color="white",
+        font="Arial-Bold",  # Ensure this font is installed or change to an available one
+        size=(1080, None),
+        align="center",
+        method="caption",
+    ).set_position(("center", "center")).set_duration(duration).set_position(
+        lambda t: ("center", 1920 // 2 + 100)  # Slightly below the title
+    )
+
+    # Overlay the text onto the video
+    final_clip = CompositeVideoClip([clip, title_text, value_text])
+
+    # Set the duration of the final clip
+    final_clip = final_clip.set_duration(duration)
+
+    return final_clip
+
+
+# Function to generate vibrant slides for all stats
+def generate_wrapped_slides_with_video(percentages, cool_phrase, video_path):
+    slides = []
+    for activity, percentage in percentages.items():
+        stat_title = f"{activity} Time"
+        stat_value = f"{percentage:.2f}%"
+        slides.append(create_video_slide(video_path, stat_title, stat_value))
+    slides.append(create_video_slide(video_path, "Final Thought", cool_phrase))
+    return slides
+
+
+# Streamlit App
+st.title("Spotify Wrapped-Style Life Stats")
+st.markdown("Answer a few questions about your life, and we'll create a vibrant video summarizing your stats!")
+
+# User Inputs
+minutes_music = st.number_input("Minutes listening to music per year", min_value=0, value=0)
+work_hours = st.slider("Work hours per day", 0, 24, 8)
+sleep_hours = st.slider("Sleep hours per day", 0, 24, 8)
+exercise_hours = st.slider("Exercise hours per day", 0, 24, 1)
+hobby_hours = st.slider("Hobby hours per day", 0, 24, 2)
+
+# Cool phrase input
+cool_phrase = st.text_input("Add a cool phrase for your video", "Work hard, play hard!")
+
+# Button to generate the video
+if st.button("Generate Spotify Wrapped-Style Video with Background"):
+    # Calculate percentages
+    percentages = calculate_percentages(minutes_music, work_hours, sleep_hours, exercise_hours, hobby_hours)
+
+    # Path to the background video
+    background_video_path = "background_videos/music.mp4"  # Replace with the path to your video
+
+    # Generate video slides
+    slides = generate_wrapped_slides_with_video(percentages, cool_phrase, background_video_path)
+
+    # Concatenate all video slides into one video
+    final_video = concatenate_videoclips(slides)
+    temp_video_path = "life_wrapped_with_bg.mp4"
+    final_video.write_videofile(temp_video_path, codec="libx264", fps=24)
+
+    # Display the video in Streamlit
+    with open(temp_video_path, "rb") as video_file:
+        st.video(video_file.read())
+
+    # Allow user to download the video
+    with open(temp_video_path, "rb") as video_file:
+        st.download_button(
+            label="Download Wrapped Video with Background",
+            data=video_file,
+            file_name="life_wrapped_with_bg.mp4",
+            mime="video/mp4",
         )
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
